@@ -4,3 +4,8 @@ ext/
 ramulator2
 *.so
 autobuild.sh
+log/
+build/
+*.o
+*.a
+.vscode/

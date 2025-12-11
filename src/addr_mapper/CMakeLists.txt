@@ -5,6 +5,7 @@ target_sources(
   addr_mapper.h 
 
   impl/linear_mappers.cpp
+  impl/linear_mappers_HBM3.cpp
   impl/rit.cpp
   impl/rit.h
 )

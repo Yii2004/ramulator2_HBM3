@@ -14,6 +14,7 @@ target_sources(
   impl/dummy_controller.cpp
   impl/generic_dram_controller.cpp
   impl/prac_dram_controller.cpp
+  impl/HBM3_controller.cpp
   
   impl/scheduler/bh_scheduler.cpp
   impl/scheduler/blocking_scheduler.cpp
@@ -22,6 +23,7 @@ target_sources(
   impl/scheduler/prac_scheduler.cpp
 
   impl/refresh/all_bank_refresh.cpp
+  impl/refresh/all_bank_refresh_HBM3.cpp
   
   impl/rowpolicy/basic_rowpolicies.cpp
 
@@ -35,6 +37,7 @@ target_sources(
   impl/plugin/rrs.cpp
   impl/plugin/aqua.cpp
   impl/plugin/rfm_manager.cpp
+  impl/plugin/HBM3_trace_recorder.cpp
 
   impl/plugin/blockhammer/blockhammer_throttler.h 
   impl/plugin/blockhammer/blockhammer_util.h 

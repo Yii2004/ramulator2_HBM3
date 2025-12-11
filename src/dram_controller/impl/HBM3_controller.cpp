@@ -3,8 +3,8 @@
 
 namespace Ramulator {
 
-class GenericDRAMController final : public IDRAMController, public Implementation {
-  RAMULATOR_REGISTER_IMPLEMENTATION(IDRAMController, GenericDRAMController, "Generic", "A generic DRAM controller.");
+class HBM3Controller final : public IDRAMController, public Implementation {
+  RAMULATOR_REGISTER_IMPLEMENTATION(IDRAMController, HBM3Controller, "HBM3", "A HBM3 controller.");
   private:
     std::deque<Request> pending;          // A queue for read requests that are about to finish (callback after RL)
 
@@ -13,41 +13,17 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
     ReqBuffer m_read_buffer;              // Read request buffer
     ReqBuffer m_write_buffer;             // Write request buffer
 
-    int m_bank_addr_idx = -1;
+    int m_row_addr_idx = -1;
 
     float m_wr_low_watermark;
     float m_wr_high_watermark;
     bool  m_is_write_mode = false;
 
-    size_t s_row_hits = 0;
-    size_t s_row_misses = 0;
-    size_t s_row_conflicts = 0;
-    size_t s_read_row_hits = 0;
-    size_t s_read_row_misses = 0;
-    size_t s_read_row_conflicts = 0;
-    size_t s_write_row_hits = 0;
-    size_t s_write_row_misses = 0;
-    size_t s_write_row_conflicts = 0;
+    std::vector<IControllerPlugin*> m_plugins;
 
-    size_t m_num_cores = 0;
-    std::vector<size_t> s_read_row_hits_per_core;
-    std::vector<size_t> s_read_row_misses_per_core;
-    std::vector<size_t> s_read_row_conflicts_per_core;
-
-    size_t s_num_read_reqs = 0;
-    size_t s_num_write_reqs = 0;
-    size_t s_num_other_reqs = 0;
-    size_t s_queue_len = 0;
-    size_t s_read_queue_len = 0;
-    size_t s_write_queue_len = 0;
-    size_t s_priority_queue_len = 0;
-    float s_queue_len_avg = 0;
-    float s_read_queue_len_avg = 0;
-    float s_write_queue_len_avg = 0;
-    float s_priority_queue_len_avg = 0;
-
-    size_t s_read_latency = 0;
-    float s_avg_read_latency = 0;
+    size_t s_num_row_hits = 0;
+    size_t s_num_row_misses = 0;
+    size_t s_num_row_conflicts = 0;
 
 
   public:
@@ -57,7 +33,6 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
 
       m_scheduler = create_child_ifce<IScheduler>();
       m_refresh = create_child_ifce<IRefreshManager>();    
-      m_rowpolicy = create_child_ifce<IRowPolicy>();    
 
       if (m_config["plugins"]) {
         YAML::Node plugin_configs = m_config["plugins"];
@@ -69,64 +44,12 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
 
     void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
       m_dram = memory_system->get_ifce<IDRAM>();
-      m_bank_addr_idx = m_dram->m_levels("bank");
+      m_row_addr_idx = m_dram->m_levels("row");
       m_priority_buffer.max_size = 512*3 + 32;
-
-      m_num_cores = frontend->get_num_cores();
-
-      s_read_row_hits_per_core.resize(m_num_cores, 0);
-      s_read_row_misses_per_core.resize(m_num_cores, 0);
-      s_read_row_conflicts_per_core.resize(m_num_cores, 0);
-
-      register_stat(s_row_hits).name("row_hits_{}", m_channel_id);
-      register_stat(s_row_misses).name("row_misses_{}", m_channel_id);
-      register_stat(s_row_conflicts).name("row_conflicts_{}", m_channel_id);
-      register_stat(s_read_row_hits).name("read_row_hits_{}", m_channel_id);
-      register_stat(s_read_row_misses).name("read_row_misses_{}", m_channel_id);
-      register_stat(s_read_row_conflicts).name("read_row_conflicts_{}", m_channel_id);
-      register_stat(s_write_row_hits).name("write_row_hits_{}", m_channel_id);
-      register_stat(s_write_row_misses).name("write_row_misses_{}", m_channel_id);
-      register_stat(s_write_row_conflicts).name("write_row_conflicts_{}", m_channel_id);
-
-      for (size_t core_id = 0; core_id < m_num_cores; core_id++) {
-        register_stat(s_read_row_hits_per_core[core_id]).name("read_row_hits_core_{}", core_id);
-        register_stat(s_read_row_misses_per_core[core_id]).name("read_row_misses_core_{}", core_id);
-        register_stat(s_read_row_conflicts_per_core[core_id]).name("read_row_conflicts_core_{}", core_id);
-      }
-
-      register_stat(s_num_read_reqs).name("num_read_reqs_{}", m_channel_id);
-      register_stat(s_num_write_reqs).name("num_write_reqs_{}", m_channel_id);
-      register_stat(s_num_other_reqs).name("num_other_reqs_{}", m_channel_id);
-      register_stat(s_queue_len).name("queue_len_{}", m_channel_id);
-      register_stat(s_read_queue_len).name("read_queue_len_{}", m_channel_id);
-      register_stat(s_write_queue_len).name("write_queue_len_{}", m_channel_id);
-      register_stat(s_priority_queue_len).name("priority_queue_len_{}", m_channel_id);
-      register_stat(s_queue_len_avg).name("queue_len_avg_{}", m_channel_id);
-      register_stat(s_read_queue_len_avg).name("read_queue_len_avg_{}", m_channel_id);
-      register_stat(s_write_queue_len_avg).name("write_queue_len_avg_{}", m_channel_id);
-      register_stat(s_priority_queue_len_avg).name("priority_queue_len_avg_{}", m_channel_id);
-
-      register_stat(s_read_latency).name("read_latency_{}", m_channel_id);
-      register_stat(s_avg_read_latency).name("avg_read_latency_{}", m_channel_id);
     };
 
     bool send(Request& req) override {
       req.final_command = m_dram->m_request_translations(req.type_id);
-
-      switch (req.type_id) {
-        case Request::Type::Read: {
-          s_num_read_reqs++;
-          break;
-        }
-        case Request::Type::Write: {
-          s_num_write_reqs++;
-          break;
-        }
-        default: {
-          s_num_other_reqs++;
-          break;
-        }
-      }
 
       // Forward existing write requests to incoming read requests
       if (req.type_id == Request::Type::Read) {
@@ -171,12 +94,6 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
     void tick() override {
       m_clk++;
 
-      // Update statistics
-      s_queue_len += m_read_buffer.size() + m_write_buffer.size() + m_priority_buffer.size() + pending.size();
-      s_read_queue_len += m_read_buffer.size() + pending.size();
-      s_write_queue_len += m_write_buffer.size();
-      s_priority_queue_len += m_priority_buffer.size();
-
       // 1. Serve completed reads
       serve_completed_reads();
 
@@ -187,9 +104,6 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
       ReqBuffer* buffer = nullptr;
       bool request_found = schedule_request(req_it, buffer);
 
-      // 2.1 Take row policy action
-      m_rowpolicy->update(request_found, req_it);
-
       // 3. Update all plugins
       for (auto plugin : m_plugins) {
         plugin->update(request_found, req_it);
@@ -198,9 +112,6 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
       // 4. Finally, issue the commands to serve the request
       if (request_found) {
         // If we find a real request to serve
-        if (req_it->is_stat_updated == false) {
-          update_request_stats(req_it);
-        }
         m_dram->issue_command(req_it->command, req_it->addr_vec);
 
         // If we are issuing the last command, set depart clock cycle and move the request to the pending queue
@@ -214,80 +125,45 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
           buffer->remove(req_it);
         } else {
           if (m_dram->m_command_meta(req_it->command).is_opening) {
-            if (m_active_buffer.enqueue(*req_it)) {
-              buffer->remove(req_it);
-            }
+            m_active_buffer.enqueue(*req_it);
+            buffer->remove(req_it);
           }
         }
-
       }
 
+      // 5. If next command is ROW/COL command while issued command is COL/ROW command, issue next command concurrently
+      ReqBuffer::iterator sec_req_it;
+      ReqBuffer* sec_buffer = nullptr;
+      bool sec_request_found = schedule_sec_request(sec_req_it, buffer, req_it->command);
+      for (auto plugin : m_plugins) {
+        plugin->update(sec_request_found, sec_req_it);
+      }
+      if (sec_request_found) {
+        m_dram->issue_command(sec_req_it->command, sec_req_it->addr_vec);
+
+        if (sec_req_it->command == sec_req_it->final_command) {
+          if (sec_req_it->type_id == Request::Type::Read) {
+            sec_req_it->depart = m_clk + m_dram->m_read_latency;
+            pending.push_back(*sec_req_it);
+          } else if (sec_req_it->type_id == Request::Type::Write) {
+          }
+          buffer->remove(sec_req_it);
+        } else {
+          if (m_dram->m_command_meta(sec_req_it->command).is_opening) {
+            m_active_buffer.enqueue(*sec_req_it);
+            buffer->remove(sec_req_it);
+          }
+        }
+      }
     };
 
 
+    bool is_pending() {
+      bool is_pending = m_active_buffer.size() ||  m_priority_buffer.size() || m_read_buffer.size() || m_write_buffer.size() || pending.size();
+      return is_pending;
+    };
+
   private:
-    /**
-     * @brief    Helper function to check if a request is hitting an open row
-     * @details
-     * 
-     */
-    bool is_row_hit(ReqBuffer::iterator& req)
-    {
-        return m_dram->check_rowbuffer_hit(req->final_command, req->addr_vec);
-    }
-    /**
-     * @brief    Helper function to check if a request is opening a row
-     * @details
-     * 
-    */
-    bool is_row_open(ReqBuffer::iterator& req)
-    {
-        return m_dram->check_node_open(req->final_command, req->addr_vec);
-    }
-
-    /**
-     * @brief    
-     * @details
-     * 
-     */
-    void update_request_stats(ReqBuffer::iterator& req)
-    {
-      req->is_stat_updated = true;
-
-      if (req->type_id == Request::Type::Read) 
-      {
-        if (is_row_hit(req)) {
-          s_read_row_hits++;
-          s_row_hits++;
-          if (req->source_id != -1)
-            s_read_row_hits_per_core[req->source_id]++;
-        } else if (is_row_open(req)) {
-          s_read_row_conflicts++;
-          s_row_conflicts++;
-          if (req->source_id != -1)
-            s_read_row_conflicts_per_core[req->source_id]++;
-        } else {
-          s_read_row_misses++;
-          s_row_misses++;
-          if (req->source_id != -1)
-            s_read_row_misses_per_core[req->source_id]++;
-        } 
-      } 
-      else if (req->type_id == Request::Type::Write) 
-      {
-        if (is_row_hit(req)) {
-          s_write_row_hits++;
-          s_row_hits++;
-        } else if (is_row_open(req)) {
-          s_write_row_conflicts++;
-          s_row_conflicts++;
-        } else {
-          s_write_row_misses++;
-          s_row_misses++;
-        }
-      }
-    }
-
     /**
      * @brief    Helper function to serve the completed read requests
      * @details
@@ -304,7 +180,6 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
           if (req.depart - req.arrive > 1) {
             // Check if this requests accesses the DRAM or is being forwarded.
             // TODO add the stats back
-            s_read_latency += req.depart - req.arrive;
           }
 
           if (req.callback) {
@@ -378,19 +253,14 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
       // 2.3 If we find a request to schedule, we need to check if it will close an opened row in the active buffer.
       if (request_found) {
         if (m_dram->m_command_meta(req_it->command).is_closing) {
-          auto& rowgroup = req_it->addr_vec;
+          std::vector<Addr_t> rowgroup((req_it->addr_vec).begin(), (req_it->addr_vec).begin() + m_row_addr_idx);
+
+          // Search the active buffer with the row address (inkl. banks, etc.)
           for (auto _it = m_active_buffer.begin(); _it != m_active_buffer.end(); _it++) {
-            auto& _it_rowgroup = _it->addr_vec;
-            bool is_matching = true;
-            for (int i = 0; i < m_bank_addr_idx + 1 ; i++) {
-              if (_it_rowgroup[i] != rowgroup[i] && _it_rowgroup[i] != -1 && rowgroup[i] != -1) {
-                is_matching = false;
-                break;
-              }
-            }
-            if (is_matching) {
+            std::vector<Addr_t> _it_rowgroup(_it->addr_vec.begin(), _it->addr_vec.begin() + m_row_addr_idx);
+            if (rowgroup == _it_rowgroup) {
+              // Invalidate this scheduling outcome if we are to interrupt a request in the active buffer
               request_found = false;
-              break;
             }
           }
         }
@@ -399,16 +269,106 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
       return request_found;
     }
 
-    void finalize() override {
-      s_avg_read_latency = (float) s_read_latency / (float) s_num_read_reqs;
 
-      s_queue_len_avg = (float) s_queue_len / (float) m_clk;
-      s_read_queue_len_avg = (float) s_read_queue_len / (float) m_clk;
-      s_write_queue_len_avg = (float) s_write_queue_len / (float) m_clk;
-      s_priority_queue_len_avg = (float) s_priority_queue_len / (float) m_clk;
+    /**
+     * @brief    Helper function to find a second request to schedule from the buffers.
+     * 
+     */
+    bool schedule_sec_request(ReqBuffer::iterator& req_it, ReqBuffer*& req_buffer, int first_command) {
+      bool request_found = false;
+      // 5.1    First, check the act buffer to serve requests that are already activating (avoid useless ACTs)
+      if (req_it= m_scheduler->get_best_request(m_active_buffer); req_it != m_active_buffer.end()) {
+        if (m_dram->check_ready(req_it->command, req_it->addr_vec)) {
+          if (compare_command_type(first_command, req_it->command)) {
+            request_found = true;
+            req_buffer = &m_active_buffer;
+          }
+        }
+      }
 
-      return;
+      // 5.2    If no requests can be scheduled from the act buffer, check the rest of the buffers
+      if (!request_found) {
+        // 5.2.1    We first check the priority buffer to prioritize e.g., maintenance requests
+        if (m_priority_buffer.size() != 0) {
+          req_buffer = &m_priority_buffer;
+          req_it = m_priority_buffer.begin();
+          req_it->command = m_dram->get_preq_command(req_it->final_command, req_it->addr_vec);
+          
+          if (compare_command_type(first_command, req_it->command)) {
+            request_found = m_dram->check_ready(req_it->command, req_it->addr_vec);
+            if (!request_found & m_priority_buffer.size() != 0) {
+              return false;
+            }
+          }
+        }
+
+        // 5.2.1    If no request to be scheduled in the priority buffer, check the read and write buffers.
+        if (!request_found) {
+          // Query the write policy to decide which buffer to serve
+          set_write_mode();
+          auto& buffer = m_is_write_mode ? m_write_buffer : m_read_buffer;
+          if (req_it = m_scheduler->get_best_request(buffer); req_it != buffer.end()) {
+            if (compare_command_type(first_command, req_it->command)) {
+              request_found = m_dram->check_ready(req_it->command, req_it->addr_vec);
+              req_buffer = &buffer;
+            }
+          }
+        }
+      }
+
+      // 5.3 If we find a request to schedule, we need to check if it will close an opened row in the active buffer.
+      if (request_found) {
+        if (m_dram->m_command_meta(req_it->command).is_closing) {
+          std::vector<Addr_t> rowgroup((req_it->addr_vec).begin(), (req_it->addr_vec).begin() + m_row_addr_idx);
+
+          // Search the active buffer with the row address (inkl. banks, etc.)
+          for (auto _it = m_active_buffer.begin(); _it != m_active_buffer.end(); _it++) {
+            std::vector<Addr_t> _it_rowgroup(_it->addr_vec.begin(), _it->addr_vec.begin() + m_row_addr_idx);
+            if (rowgroup == _it_rowgroup) {
+              // Invalidate this scheduling outcome if we are to interrupt a request in the active buffer
+              request_found = false;
+            }
+          }
+        }
+      }
+
+      return request_found;
     }
+
+    // Row command: 0,  Col command: 1
+    int get_command_type(int command) {
+      switch (command)  {
+          case 0:  return 0; // ACT,   Row command
+          case 1:  return 0; // PRE,   Row command
+          case 2:  return 0; // PREA,  Row command
+          case 3:  return 1; // RD,    Col command
+          case 4:  return 1; // WR,    Col command
+          case 5:  return 1; // RDA,   Col command
+          case 6:  return 1; // WRA,   Col command
+          case 7:  return 0; // REFab, Row command
+          case 8:  return 0; // REBsb, Row command
+          case 9:  return 0; // RFMab, Row command
+          case 10: return 0; // RFMsb, Row command
+          default: return -1;
+      }
+    }
+
+    bool compare_command_type(int first_command, int second_command) {
+      int first_command_type = get_command_type(first_command);
+      int second_command_type = get_command_type(second_command);
+ 
+      if (first_command_type == -1 || second_command_type == -1) {
+        return false;
+      }
+
+      if (first_command_type == second_command_type) {
+        return false;
+      }
+      else {
+        return true;
+      }
+    }
+
 
 };
   
